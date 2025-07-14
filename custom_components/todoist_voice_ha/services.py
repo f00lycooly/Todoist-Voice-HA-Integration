@@ -97,6 +97,31 @@ CONVERSATION_STATUS_SCHEMA = vol.Schema(
     }
 )
 
+COMPLETE_TASK_SCHEMA = vol.Schema(
+    {
+        vol.Required("task_id"): cv.string,
+    }
+)
+
+REOPEN_TASK_SCHEMA = vol.Schema(
+    {
+        vol.Required("task_id"): cv.string,
+    }
+)
+
+GET_TASKS_SCHEMA = vol.Schema(
+    {
+        vol.Optional("filter_type", default="all"): vol.In([
+            "all", "today", "overdue", "upcoming", "tomorrow", "this_week", "high_priority"
+        ]),
+        vol.Optional("project_name"): cv.string,
+        vol.Optional("project_id"): cv.string,
+        vol.Optional("priority"): vol.All(vol.Coerce(int), vol.Range(min=1, max=4)),
+        vol.Optional("labels"): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("limit", default=20): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
+    }
+)
+
 
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Set up services for the integration."""
@@ -455,6 +480,140 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             _LOGGER.error("Failed to get conversation status: %s", err)
             raise HomeAssistantError(f"Failed to get conversation status: {err}") from err
 
+    async def async_complete_task(call: ServiceCall) -> None:
+        """Complete a task."""
+        coordinator = get_coordinator()
+        
+        try:
+            task_id = call.data["task_id"]
+            
+            # Get task details before completing
+            task = await coordinator.get_task_by_id(task_id)
+            if not task:
+                raise HomeAssistantError(f"Task with ID {task_id} not found")
+            
+            success = await coordinator.complete_task(task_id)
+            
+            if success:
+                _LOGGER.info("Task completed successfully: %s", task["content"])
+                
+                # Fire event
+                hass.bus.async_fire(
+                    f"{DOMAIN}_task_completed",
+                    {
+                        "task_id": task_id,
+                        "task_content": task["content"],
+                        "project_id": task.get("project_id"),
+                        "priority": task.get("priority", 1),
+                    },
+                )
+            else:
+                raise HomeAssistantError("Failed to complete task")
+
+        except Exception as err:
+            _LOGGER.error("Failed to complete task: %s", err)
+            raise HomeAssistantError(f"Failed to complete task: {err}") from err
+
+    async def async_reopen_task(call: ServiceCall) -> None:
+        """Reopen a completed task."""
+        coordinator = get_coordinator()
+        
+        try:
+            task_id = call.data["task_id"]
+            
+            success = await coordinator.reopen_task(task_id)
+            
+            if success:
+                _LOGGER.info("Task reopened successfully: %s", task_id)
+                
+                # Fire event
+                hass.bus.async_fire(
+                    f"{DOMAIN}_task_reopened",
+                    {
+                        "task_id": task_id,
+                    },
+                )
+            else:
+                raise HomeAssistantError("Failed to reopen task")
+
+        except Exception as err:
+            _LOGGER.error("Failed to reopen task: %s", err)
+            raise HomeAssistantError(f"Failed to reopen task: {err}") from err
+
+    async def async_get_tasks(call: ServiceCall) -> None:
+        """Get tasks with various filters."""
+        coordinator = get_coordinator()
+        
+        try:
+            filter_type = call.data.get("filter_type", "all")
+            project_name = call.data.get("project_name")
+            project_id = call.data.get("project_id")
+            priority = call.data.get("priority")
+            labels = call.data.get("labels", [])
+            limit = call.data.get("limit", 20)
+            
+            # Apply filters
+            if filter_type == "today":
+                tasks = await coordinator.get_tasks_due_today()
+            elif filter_type == "overdue":
+                tasks = await coordinator.get_overdue_tasks()
+            elif filter_type == "upcoming":
+                tasks = await coordinator.get_upcoming_tasks()
+            elif filter_type == "tomorrow":
+                tasks = await coordinator.get_tasks_due_tomorrow()
+            elif filter_type == "this_week":
+                tasks = await coordinator.get_tasks_this_week()
+            elif filter_type == "high_priority":
+                tasks = await coordinator.get_high_priority_tasks()
+            elif project_name:
+                tasks = await coordinator.get_tasks_by_project_name(project_name)
+            elif project_id:
+                tasks = await coordinator.get_tasks_by_filter("project", project_id=project_id)
+            elif priority:
+                tasks = await coordinator.get_tasks_by_filter("priority", priority=priority)
+            elif labels:
+                tasks = await coordinator.get_tasks_by_filter("labels", labels=labels)
+            else:
+                tasks = coordinator.tasks
+            
+            # Limit results
+            limited_tasks = tasks[:limit]
+            
+            # Prepare task data for event
+            task_data = [
+                {
+                    "id": task["id"],
+                    "content": task["content"],
+                    "priority": task.get("priority", 1),
+                    "project_id": task.get("project_id"),
+                    "due": task.get("due", {}).get("date") if task.get("due") else None,
+                    "labels": task.get("labels", []),
+                    "created_at": task.get("created_at"),
+                }
+                for task in limited_tasks
+            ]
+            
+            _LOGGER.info("Retrieved %d tasks with filter '%s'", len(limited_tasks), filter_type)
+            
+            # Fire event with results
+            hass.bus.async_fire(
+                f"{DOMAIN}_tasks_retrieved",
+                {
+                    "filter_type": filter_type,
+                    "project_name": project_name,
+                    "project_id": project_id,
+                    "priority": priority,
+                    "labels": labels,
+                    "tasks": task_data,
+                    "task_count": len(limited_tasks),
+                    "total_available": len(tasks),
+                },
+            )
+
+        except Exception as err:
+            _LOGGER.error("Failed to get tasks: %s", err)
+            raise HomeAssistantError(f"Failed to get tasks: {err}") from err
+
     # Register services
     hass.services.async_register(
         DOMAIN, "create_task", async_create_task, schema=CREATE_TASK_SCHEMA
@@ -491,6 +650,18 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, "get_conversation_status", async_get_conversation_status, schema=CONVERSATION_STATUS_SCHEMA
     )
+    
+    hass.services.async_register(
+        DOMAIN, "complete_task", async_complete_task, schema=COMPLETE_TASK_SCHEMA
+    )
+    
+    hass.services.async_register(
+        DOMAIN, "reopen_task", async_reopen_task, schema=REOPEN_TASK_SCHEMA
+    )
+    
+    hass.services.async_register(
+        DOMAIN, "get_tasks", async_get_tasks, schema=GET_TASKS_SCHEMA
+    )
 
     _LOGGER.info("Todoist Voice HA services registered successfully")
 
@@ -507,6 +678,9 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         "start_conversation",
         "continue_conversation",
         "get_conversation_status",
+        "complete_task",
+        "reopen_task",
+        "get_tasks",
     ]
     
     for service in services:

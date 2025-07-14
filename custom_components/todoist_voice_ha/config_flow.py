@@ -54,23 +54,32 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
 
     Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
     """
+    _LOGGER.info("Validating Todoist API token")
     client = TodoistClient(data[CONF_API_TOKEN])
     
     try:
         # Test the API token by attempting to get projects
+        _LOGGER.debug("Attempting to validate token")
         validation_result = await client.validate_token()
-        if not validation_result["valid"]:
-            raise InvalidAuth(validation_result.get("error", "Invalid token"))
+        _LOGGER.debug("Token validation result: %s", validation_result)
         
-        # Get projects for default project validation
-        projects = await client.get_projects()
+        if not validation_result["valid"]:
+            error_msg = validation_result.get("error", "Invalid token")
+            _LOGGER.error("Token validation failed: %s", error_msg)
+            raise InvalidAuth(error_msg)
+        
+        # Get projects for default project validation  
+        projects = validation_result.get("projects", [])
+        _LOGGER.info("Successfully validated token with %d projects", len(projects))
         
         return {
             "title": data.get(CONF_NAME, "Todoist Voice HA"),
             "projects": projects,
         }
+    except InvalidAuth:
+        raise
     except Exception as err:
-        _LOGGER.error("Failed to validate input: %s", err)
+        _LOGGER.error("Failed to validate input: %s", err, exc_info=True)
         raise CannotConnect(str(err)) from err
 
 

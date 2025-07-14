@@ -8,7 +8,10 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import aiohttp
-import async_timeout
+try:
+    from asyncio import timeout  # Python 3.11+
+except ImportError:
+    from async_timeout import timeout  # Python 3.10 fallback
 from dateutil import parser as date_parser
 
 from homeassistant.core import HomeAssistant
@@ -63,40 +66,75 @@ class TodoistClient:
             raise HomeAssistantError("Session not initialized")
 
         url = f"{TODOIST_API_BASE}/{endpoint}"
+        _LOGGER.debug("Making API request: %s %s", method, url)
         
         try:
-            async with async_timeout.timeout(timeout):
+            async with timeout(timeout):
                 async with self.session.request(
                     method=method,
                     url=url,
                     headers=self.headers,
                     json=data,
                 ) as response:
-                    response_data = await response.json()
+                    _LOGGER.debug("API response status: %s", response.status)
+                    
+                    # Handle different response types
+                    content_type = response.headers.get('content-type', '')
+                    if 'application/json' in content_type:
+                        response_data = await response.json()
+                    else:
+                        response_text = await response.text()
+                        _LOGGER.error("Unexpected content type: %s, body: %s", content_type, response_text)
+                        raise HomeAssistantError(f"Invalid response format: {content_type}")
                     
                     if response.status == 401:
+                        _LOGGER.error("Invalid API token - HTTP 401")
                         raise HomeAssistantError(ERROR_MESSAGES["invalid_token"])
                     elif response.status == 403:
+                        _LOGGER.error("Forbidden access - HTTP 403")
                         raise HomeAssistantError(ERROR_MESSAGES["invalid_token"])
                     elif response.status >= 400:
                         error_msg = response_data.get("error", f"HTTP {response.status}")
+                        _LOGGER.error("API error %s: %s", response.status, error_msg)
                         raise HomeAssistantError(f"{ERROR_MESSAGES['api_error']}: {error_msg}")
                     
                     return response_data
                     
-        except asyncio.TimeoutError as err:
-            raise HomeAssistantError(ERROR_MESSAGES["timeout_error"]) from err
-        except aiohttp.ClientError as err:
-            raise HomeAssistantError(f"{ERROR_MESSAGES['network_error']}: {err}") from err
+        except Exception as err:
+            # Handle different types of errors
+            err_str = str(err).lower()
+            if "timeout" in err_str or "asyncio.timeout" in err_str:
+                _LOGGER.error("Request timeout for %s", url)
+                raise HomeAssistantError(ERROR_MESSAGES["timeout_error"]) from err
+            elif isinstance(err, aiohttp.ClientError):
+                _LOGGER.error("Network error for %s: %s", url, err)
+                raise HomeAssistantError(f"{ERROR_MESSAGES['network_error']}: {err}") from err
+            elif isinstance(err, HomeAssistantError):
+                # Re-raise HomeAssistantError as-is
+                raise
+            else:
+                _LOGGER.error("Unexpected error for %s: %s", url, err)
+                raise HomeAssistantError(f"Unexpected error: {err}") from err
 
     async def validate_token(self) -> dict[str, Any]:
         """Validate the API token."""
+        # Ensure we have a session for validation
+        need_to_close = False
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+            need_to_close = True
+            
         try:
             projects = await self._request("GET", "projects")
             return {"valid": True, "projects": projects}
-        except HomeAssistantError as err:
+        except Exception as err:
             _LOGGER.error("Token validation failed: %s", err)
             return {"valid": False, "error": str(err)}
+        finally:
+            # Clean up session if we created it
+            if need_to_close and self.session:
+                await self.session.close()
+                self.session = None
 
     async def get_projects(self) -> list[dict[str, Any]]:
         """Get all projects."""
@@ -106,6 +144,65 @@ class TodoistClient:
             return projects
         except HomeAssistantError as err:
             _LOGGER.error("Failed to get projects: %s", err)
+            raise
+
+    async def get_tasks(self, **kwargs) -> list[dict[str, Any]]:
+        """Get all tasks with optional filters."""
+        try:
+            # Build query parameters
+            params = {}
+            if "project_id" in kwargs:
+                params["project_id"] = kwargs["project_id"]
+            if "section_id" in kwargs:
+                params["section_id"] = kwargs["section_id"]
+            if "label" in kwargs:
+                params["label"] = kwargs["label"]
+            if "filter" in kwargs:
+                params["filter"] = kwargs["filter"]
+            if "lang" in kwargs:
+                params["lang"] = kwargs["lang"]
+            if "ids" in kwargs:
+                params["ids"] = ",".join(map(str, kwargs["ids"]))
+            
+            # Make request with query parameters
+            url_params = "&".join([f"{k}={v}" for k, v in params.items()])
+            endpoint = f"tasks?{url_params}" if url_params else "tasks"
+            
+            tasks = await self._request("GET", endpoint)
+            _LOGGER.debug("Retrieved %d tasks", len(tasks))
+            return tasks
+        except HomeAssistantError as err:
+            _LOGGER.error("Failed to get tasks: %s", err)
+            raise
+
+    async def get_task(self, task_id: str) -> dict[str, Any]:
+        """Get a specific task by ID."""
+        try:
+            task = await self._request("GET", f"tasks/{task_id}")
+            _LOGGER.debug("Retrieved task: %s", task.get("content", "Unknown"))
+            return task
+        except HomeAssistantError as err:
+            _LOGGER.error("Failed to get task %s: %s", task_id, err)
+            raise
+
+    async def complete_task(self, task_id: str) -> bool:
+        """Mark a task as completed."""
+        try:
+            await self._request("POST", f"tasks/{task_id}/close")
+            _LOGGER.info("Completed task: %s", task_id)
+            return True
+        except HomeAssistantError as err:
+            _LOGGER.error("Failed to complete task %s: %s", task_id, err)
+            raise
+
+    async def reopen_task(self, task_id: str) -> bool:
+        """Reopen a completed task."""
+        try:
+            await self._request("POST", f"tasks/{task_id}/reopen")
+            _LOGGER.info("Reopened task: %s", task_id)
+            return True
+        except HomeAssistantError as err:
+            _LOGGER.error("Failed to reopen task %s: %s", task_id, err)
             raise
 
     async def create_project(self, name: str, **kwargs) -> dict[str, Any]:
@@ -261,6 +358,147 @@ class TodoistClient:
                             break
 
         return list(actions)
+
+    def filter_tasks_by_date(self, tasks: list[dict[str, Any]], date_filter: str) -> list[dict[str, Any]]:
+        """Filter tasks by date criteria."""
+        if not tasks:
+            return []
+
+        today = datetime.now().date()
+        filtered_tasks = []
+
+        for task in tasks:
+            due_date = task.get("due")
+            if not due_date:
+                if date_filter == "no_due_date":
+                    filtered_tasks.append(task)
+                continue
+
+            try:
+                # Parse due date
+                if isinstance(due_date, dict):
+                    due_date_str = due_date.get("date")
+                else:
+                    due_date_str = due_date
+
+                if not due_date_str:
+                    continue
+
+                # Handle different date formats
+                if "T" in due_date_str:
+                    task_date = datetime.fromisoformat(due_date_str.replace("Z", "+00:00")).date()
+                else:
+                    task_date = datetime.fromisoformat(due_date_str).date()
+
+                # Apply filter
+                if date_filter == "today" and task_date == today:
+                    filtered_tasks.append(task)
+                elif date_filter == "overdue" and task_date < today:
+                    filtered_tasks.append(task)
+                elif date_filter == "tomorrow" and task_date == (today + timedelta(days=1)):
+                    filtered_tasks.append(task)
+                elif date_filter == "this_week":
+                    days_ahead = (task_date - today).days
+                    if 0 <= days_ahead <= 7:
+                        filtered_tasks.append(task)
+                elif date_filter == "next_week":
+                    days_ahead = (task_date - today).days
+                    if 7 < days_ahead <= 14:
+                        filtered_tasks.append(task)
+                elif date_filter == "upcoming":
+                    if task_date >= today:
+                        filtered_tasks.append(task)
+
+            except (ValueError, TypeError) as err:
+                _LOGGER.warning("Failed to parse task due date %s: %s", due_date, err)
+                continue
+
+        return filtered_tasks
+
+    def filter_tasks_by_priority(self, tasks: list[dict[str, Any]], priority: int) -> list[dict[str, Any]]:
+        """Filter tasks by priority level."""
+        return [task for task in tasks if task.get("priority", 1) == priority]
+
+    def filter_tasks_by_project(self, tasks: list[dict[str, Any]], project_id: str) -> list[dict[str, Any]]:
+        """Filter tasks by project ID."""
+        return [task for task in tasks if task.get("project_id") == project_id]
+
+    def filter_tasks_by_labels(self, tasks: list[dict[str, Any]], labels: list[str]) -> list[dict[str, Any]]:
+        """Filter tasks that contain any of the specified labels."""
+        if not labels:
+            return tasks
+        
+        filtered_tasks = []
+        for task in tasks:
+            task_labels = task.get("labels", [])
+            if any(label in task_labels for label in labels):
+                filtered_tasks.append(task)
+        return filtered_tasks
+
+    def get_task_summary(self, tasks: list[dict[str, Any]]) -> dict[str, Any]:
+        """Get summary statistics for a list of tasks."""
+        if not tasks:
+            return {
+                "total": 0,
+                "by_priority": {1: 0, 2: 0, 3: 0, 4: 0},
+                "with_due_date": 0,
+                "without_due_date": 0,
+                "overdue": 0,
+                "due_today": 0,
+                "due_tomorrow": 0,
+            }
+
+        today = datetime.now().date()
+        summary = {
+            "total": len(tasks),
+            "by_priority": {1: 0, 2: 0, 3: 0, 4: 0},
+            "with_due_date": 0,
+            "without_due_date": 0,
+            "overdue": 0,
+            "due_today": 0,
+            "due_tomorrow": 0,
+        }
+
+        for task in tasks:
+            # Count by priority
+            priority = task.get("priority", 1)
+            summary["by_priority"][priority] = summary["by_priority"].get(priority, 0) + 1
+
+            # Analyze due dates
+            due_date = task.get("due")
+            if not due_date:
+                summary["without_due_date"] += 1
+                continue
+
+            summary["with_due_date"] += 1
+
+            try:
+                # Parse due date
+                if isinstance(due_date, dict):
+                    due_date_str = due_date.get("date")
+                else:
+                    due_date_str = due_date
+
+                if not due_date_str:
+                    continue
+
+                if "T" in due_date_str:
+                    task_date = datetime.fromisoformat(due_date_str.replace("Z", "+00:00")).date()
+                else:
+                    task_date = datetime.fromisoformat(due_date_str).date()
+
+                # Categorize by date
+                if task_date < today:
+                    summary["overdue"] += 1
+                elif task_date == today:
+                    summary["due_today"] += 1
+                elif task_date == (today + timedelta(days=1)):
+                    summary["due_tomorrow"] += 1
+
+            except (ValueError, TypeError) as err:
+                _LOGGER.warning("Failed to parse task due date %s: %s", due_date, err)
+
+        return summary
 
     def parse_due_date(self, date_input: str) -> str | None:
         """Parse a due date from various formats."""

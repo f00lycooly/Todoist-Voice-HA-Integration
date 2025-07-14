@@ -23,11 +23,26 @@ A pure Home Assistant Custom Integration for conversational task creation with T
 
 ### HACS (Recommended)
 
-1. Add this repository to HACS as a custom repository
-2. Install "Todoist Voice HA Integration"
-3. Restart Home Assistant
-4. Go to Settings → Integrations → Add Integration
-5. Search for "Todoist Voice HA" and follow the setup wizard
+#### Option 1: Default HACS Repository (When Available)
+1. Open HACS in Home Assistant
+2. Go to "Integrations" 
+3. Search for "Todoist Voice HA"
+4. Click "Install"
+5. Restart Home Assistant
+6. Go to Settings → Integrations → Add Integration
+7. Search for "Todoist Voice HA" and follow the setup wizard
+
+#### Option 2: Custom Repository (For Testing/Development)
+1. Open HACS in Home Assistant
+2. Go to "Integrations"
+3. Click the three dots menu → "Custom repositories"
+4. Add repository URL: `https://github.com/f00lycooly/Todoist-Voice-HA-Integration`
+5. Category: "Integration"
+6. Click "Add"
+7. Find "Todoist Voice HA" in the list and click "Install"
+8. Restart Home Assistant
+9. Go to Settings → Integrations → Add Integration
+10. Search for "Todoist Voice HA" and follow the setup wizard
 
 ### Manual Installation
 
@@ -155,6 +170,9 @@ data:
 - `todoist_voice_ha.validate_date` - Validate date input
 - `todoist_voice_ha.refresh_projects` - Refresh project cache
 - `todoist_voice_ha.get_conversation_status` - Get conversation status
+- `todoist_voice_ha.complete_task` - Mark a task as completed
+- `todoist_voice_ha.reopen_task` - Reopen a completed task
+- `todoist_voice_ha.get_tasks` - Retrieve tasks with filtering options
 
 ### Voice Assistant Integration
 
@@ -192,6 +210,91 @@ The integration fires events for automation:
 - `todoist_voice_ha_voice_input_parsed`
 - `todoist_voice_ha_date_validated`
 - `todoist_voice_ha_projects_refreshed`
+- `todoist_voice_ha_task_completed`
+- `todoist_voice_ha_task_reopened`
+- `todoist_voice_ha_tasks_retrieved`
+
+## Task Sensors
+
+The integration provides comprehensive task monitoring through multiple sensors:
+
+### Available Sensors
+
+- **`sensor.todoist_project_count`** - Total number of projects
+- **`sensor.todoist_task_count`** - Total number of active tasks
+- **`sensor.todoist_tasks_due_today`** - Tasks due today
+- **`sensor.todoist_overdue_tasks`** - Overdue tasks (critical for reminders!)
+- **`sensor.todoist_upcoming_tasks`** - Upcoming tasks
+- **`sensor.todoist_tasks_due_tomorrow`** - Tasks due tomorrow
+- **`sensor.todoist_tasks_this_week`** - Tasks due this week
+- **`sensor.todoist_high_priority_tasks`** - High priority tasks (P1 & P2)
+- **`sensor.todoist_task_summary`** - Overall task summary with productivity score
+- **`sensor.todoist_next_task`** - Next most important task (perfect for Assist!)
+- **`sensor.todoist_last_update`** - Last update timestamp
+- **`sensor.todoist_conversation_state`** - Current conversation state
+
+### Task Sensor Features
+
+- **Rich Attributes**: Each sensor includes detailed task information
+- **Smart Prioritization**: Tasks sorted by urgency (overdue → today → priority)
+- **Productivity Scoring**: Task summary includes productivity metrics
+- **Assist Integration**: Perfect for voice reminders and notifications
+
+### Example: Voice Reminders with Assist
+
+```yaml
+automation:
+  - alias: "Morning Task Reminder"
+    trigger:
+      - platform: time
+        at: "08:00:00"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.todoist_overdue_tasks
+        above: 0
+    action:
+      - service: tts.speak
+        data:
+          message: >
+            Good morning! You have {{ states('sensor.todoist_overdue_tasks') }} overdue tasks
+            and {{ states('sensor.todoist_tasks_due_today') }} tasks due today.
+            Your next task is: {{ states('sensor.todoist_next_task') }}
+
+  - alias: "Task Completion Notification"
+    trigger:
+      - platform: event
+        event_type: todoist_voice_ha_task_completed
+    action:
+      - service: persistent_notification.create
+        data:
+          title: "Task Completed! 🎉"
+          message: "Great job completing: {{ trigger.event.data.task_content }}"
+```
+
+### Task Management Services
+
+#### Complete a Task
+```yaml
+service: todoist_voice_ha.complete_task
+data:
+  task_id: "123456789"
+```
+
+#### Get Tasks with Filtering
+```yaml
+service: todoist_voice_ha.get_tasks
+data:
+  filter_type: "overdue"  # Options: all, today, overdue, upcoming, tomorrow, this_week, high_priority
+  limit: 10
+```
+
+#### Get Tasks by Project
+```yaml
+service: todoist_voice_ha.get_tasks
+data:
+  project_name: "Shopping"
+  limit: 5
+```
 
 ## Conversation Flow
 
