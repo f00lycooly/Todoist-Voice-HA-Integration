@@ -1,0 +1,200 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Todoist Voice HA",
+        "description": "Set up your Todoist Voice HA integration",
+        "data": {
+          "api_token": "Todoist API Token",
+          "name": "Integration Name",
+          "auto_create_entities": "Auto-create helper entities",
+          "conversation_timeout": "Conversation timeout (seconds)",
+          "update_interval": "Update interval (seconds)"
+        }
+      },
+      "project": {
+        "title": "Default Project",
+        "description": "Select your default project for new tasks (found {project_count} projects)",
+        "data": {
+          "default_project": "Default Project"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Todoist API",
+      "invalid_auth": "Invalid Todoist API token",
+      "project_not_found": "Selected project not found",
+      "unknown": "Unexpected error occurred"
+    },
+    "abort": {
+      "already_configured": "Todoist Voice HA is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "description": "Configure Todoist Voice HA options",
+        "data": {
+          "auto_create_entities": "Auto-create helper entities",
+          "conversation_timeout": "Conversation timeout (seconds)",
+          "update_interval": "Update interval (seconds)"
+        }
+      }
+    }
+  },
+  "services": {
+    "create_task": {
+      "name": "Create Task",
+      "description": "Create a new task from text with automatic action extraction",
+      "fields": {
+        "text": {
+          "name": "Text",
+          "description": "Text to extract actions from"
+        },
+        "project_name": {
+          "name": "Project Name",
+          "description": "Name of the project to create tasks in"
+        },
+        "project_id": {
+          "name": "Project ID",
+          "description": "ID of the project to create tasks in"
+        },
+        "priority": {
+          "name": "Priority",
+          "description": "Task priority (1=highest, 4=lowest)"
+        },
+        "due_date": {
+          "name": "Due Date",
+          "description": "Due date in natural language or ISO format"
+        },
+        "labels": {
+          "name": "Labels",
+          "description": "List of labels to apply to tasks"
+        },
+        "main_task_title": {
+          "name": "Main Task Title",
+          "description": "Title for the main task"
+        },
+        "conversation_id": {
+          "name": "Conversation ID",
+          "description": "ID of the conversation context"
+        }
+      }
+    },
+    "find_projects": {
+      "name": "Find Projects",
+      "description": "Find projects matching a query",
+      "fields": {
+        "query": {
+          "name": "Query",
+          "description": "Search query for projects"
+        },
+        "max_results": {
+          "name": "Max Results",
+          "description": "Maximum number of results to return"
+        }
+      }
+    },
+    "create_project": {
+      "name": "Create Project",
+      "description": "Create a new Todoist project",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "Name of the new project"
+        },
+        "color": {
+          "name": "Color",
+          "description": "Color for the project"
+        },
+        "parent_id": {
+          "name": "Parent ID",
+          "description": "ID of the parent project"
+        },
+        "is_favorite": {
+          "name": "Is Favorite",
+          "description": "Mark project as favorite"
+        }
+      }
+    },
+    "parse_voice_input": {
+      "name": "Parse Voice Input",
+      "description": "Parse voice input for actions and context",
+      "fields": {
+        "text": {
+          "name": "Text",
+          "description": "Voice input text to parse"
+        },
+        "context": {
+          "name": "Context",
+          "description": "Additional context for parsing"
+        }
+      }
+    },
+    "validate_date": {
+      "name": "Validate Date",
+      "description": "Validate and parse date input",
+      "fields": {
+        "date_input": {
+          "name": "Date Input",
+          "description": "Date input to validate"
+        },
+        "context": {
+          "name": "Context",
+          "description": "Additional context for validation"
+        }
+      }
+    },
+    "refresh_projects": {
+      "name": "Refresh Projects",
+      "description": "Refresh the project cache from Todoist API"
+    },
+    "start_conversation": {
+      "name": "Start Conversation",
+      "description": "Start a conversational task creation session",
+      "fields": {
+        "text": {
+          "name": "Text",
+          "description": "Initial voice input text"
+        },
+        "context": {
+          "name": "Context",
+          "description": "Initial conversation context"
+        },
+        "timeout": {
+          "name": "Timeout",
+          "description": "Conversation timeout in seconds"
+        }
+      }
+    },
+    "continue_conversation": {
+      "name": "Continue Conversation",
+      "description": "Continue an existing conversation",
+      "fields": {
+        "conversation_id": {
+          "name": "Conversation ID",
+          "description": "ID of the conversation to continue"
+        },
+        "text": {
+          "name": "Text",
+          "description": "Response text"
+        },
+        "context": {
+          "name": "Context",
+          "description": "Additional context"
+        }
+      }
+    },
+    "get_conversation_status": {
+      "name": "Get Conversation Status",
+      "description": "Get the status of a conversation",
+      "fields": {
+        "conversation_id": {
+          "name": "Conversation ID",
+          "description": "ID of the conversation"
+        }
+      }
+    }
+  }
+}
